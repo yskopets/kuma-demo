@@ -1,45 +1,36 @@
 # Kubernetes Deployment Guide
 
 ## Introductions
-This Kuma Kubernetes deployment guide will walk you through how to deploy the marketplace application on Kubernetes and configure Kuma to work alongside it.
+In this directory, you will find the necessary files and instruction to get Kuma up and running in Kubernetes mode via Minikube. 
 
 When running on Kubernetes, Kuma will store all of its state and configuration on the underlying Kubernetes API Server, therefore requiring no dependency to store the data.
 
 ## Table of contents
-- [Setup Environment](#setup-environment)
-  - [Setup Minkube](#1-start-a-kubernetes-cluster-with-at-least-4gb-of-memory-weve-tested-kuma-on-kubernetes-v1130---v116x-so-use-anything-older-than-v1130-with-caution-in-this-demo-well-be-using-v1154)
-  - [Deploy Marketplace Application](#2-deploy-kumas-sample-marketplace-application-in-minikube)
-  - [Download Kuma](#4-download-the-latest-version-of-kuma)
-  - [Install control-plane via `kumactl`](#7-install-the-control-plane-using-kumactl)
-- Kuma Policies
-  - [mTLS Policy](#14-lets-enable-mtls)
-  - [Traffic Permission Policy](#15-now-lets-enable-traffic-permission-for-all-services-so-our-application-will-work-like-it-use-to)
-  - [Logging Policy](#17-lets-add-logging-for-traffic-between-all-services-and-send-them-to-logstash)
-  - [Traffic Routing Policy](#22-lets-explore-adding-traffic-routing-to-our-service-mesh-but-before-we-do-we-need-to-scale-up-the-v1-and-v2-deployment-of-our-sample-application)
-  - [Traffic Metrics Policy](#26-enable-prometheus-metrics-on-the-mesh-object)
-- Kuma GUI
-  - [Visualizing Kuma Mesh](#30-visualize-mesh-with-kuma-gui)
-- Kong API Gateway Integration
-  - [Deploying Kong Alongside Kuma](#31-kong-gateway-integration)
 
 ## Setup Environment
 
-### 1. Start a Kubernetes cluster with at least 4GB of memory. We've tested Kuma on Kubernetes v1.13.0 - v1.16.x, so use anything older than v1.13.0 with caution. In this demo, we'll be using v1.15.4. 
+### Minikube
+
+We'll be using Minikube to deploy our application and demonstrate Kuma's capabilities in Kubernetes mode. Please follow Minikube's [installation guide](https://kubernetes.io/docs/tasks/tools/install-minikube/) to have it set up correctly before proceeding.
+
+After you have minikube installed, start a Kubernetes cluster with at least 6GB of memory to run the marketplace application. We've tested Kuma on Kubernetes v1.13.0 - v1.16.x, so use anything older than v1.13.0 with caution. In this demo, we'll be using v1.16.6. 
 
 ```bash
-$ minikube start --cpus 2 --memory 6144 --kubernetes-version v1.15.4 -p kuma-demo
-😄  [kuma-demo] minikube v1.5.2 on Darwin 10.15.1
+$ minikube start --cpus 2 --memory 6144 --kubernetes-version v1.16.6 -p kuma-demo
+😄  [kuma-demo] minikube v1.6.2 on Darwin 10.15.1
 ✨  Automatically selected the 'hyperkit' driver (alternates: [virtualbox])
-🔥  Creating hyperkit VM (CPUs=2, Memory=4096MB, Disk=20000MB) ...
-🐳  Preparing Kubernetes v1.15.4 on Docker '18.09.9' ...
+🔥  Creating hyperkit VM (CPUs=2, Memory=6144MB, Disk=20000MB) ...
+🐳  Preparing Kubernetes v1.16.6 on Docker '19.03.5' ...
 🚜  Pulling images ...
-🚀  Launching Kubernetes ... 
-⌛  Waiting for: apiserver
+🚀  Launching Kubernetes ...
+⌛  Waiting for cluster to come online ...
 🏄  Done! kubectl is now configured to use "kuma-demo"
 ```
 
-### 2. Deploy Kuma's sample marketplace application in minikube
-You can deploy the sample marketplace application using the [`kuma-demo-aio.yaml`](/kubernetes/kuma-demo-aio.yaml) file in this directory.
+### Marketplace application
+
+Run the following command to run the sample marketplace application via the [`kuma-demo-aio.yaml`](/kubernetes/kuma-demo-aio.yaml) file in this directory.
+
 ```bash
 $ kubectl apply -f kuma-demo-aio.yaml
 namespace/kuma-demo created
@@ -59,11 +50,12 @@ deployment.apps/kuma-demo-app created
 
 This will deploy our demo marketplace application split across multiple pods:
 1. The first pod is an Elasticsearch service that stores all the items in our marketplace
-2. The second pod is a Redis service that stores reviews for each item
-3. The third pod is a Node application that represents a backend
-4. The remaining pods represent multiple versions of our Node/Vue application that allows you to visually query the Elastic and Redis endpoints
+2. The second pod is the Vue application that allows you to visually query the Elastic and Redis endpoints in a marketplace GUI
+3. The third pod is a Node application that consists of all the API endpoints used to query items
+4. The last pod is a Redis service that stores reviews for each item
 
-Check the pods are up and running by checking the `kuma-demo` namespace
+
+To check the pods are up and running, use `kumactl get pods [..]` to check if the four pods are running in the `kuma-demo` namespace:
 
 ```bash
 $ kubectl get pods -n kuma-demo
@@ -74,43 +66,39 @@ kuma-demo-backend-v0-7dcb8dc8fd-rq798   1/1     Running   0          31s
 redis-master-5b5978b77f-pmhnz           1/1     Running   0          32s
 ```
 
-In the following steps, we will be using the pod name of the `kuma-demo-app-*************` pod. Please replace any `${KUMA_DEMO_APP_POD_NAME}` variables with your pod name.
-
-### 3. Port-forward the sample application to access the front-end UI at http://localhost:8080
-
+Once all the pods have a status of running, port-forward the `kuma-demo-app-7bb5d85c8c-8kl2z` pod to access the marketplace application. The pod name will vary each time you deploy the application. Please copy and paste the `kuma-demo-app-[...]` pod name from your `kubectl get pods -n kuma-demo` output.
 <pre><code>$ kubectl port-forward <b>${KUMA_DEMO_APP_POD_NAME}</b> -n kuma-demo 8080:80
 Forwarding from 127.0.0.1:8080 -> 80
 Forwarding from [::1]:8080 -> 80
 </code></pre>
 
-Now you can access the marketplace application through your web browser at http://localhost:8080.
-
-The items on the front page are pulled from the Elasticsearch service. While the reviews for each item sit within the Redis service. You can query for individual items and look at their reviews.
+Now you can access the marketplace application through your web browser at http://localhost:8080. The items on the front page are pulled from the Elasticsearch service. While the reviews for each item sit within the Redis service. You can query for individual items and look at their reviews.
 
 
-### 4. Download the latest version of Kuma
+### Kuma
+
 The following command will download the Mac compatible version of Kuma. To find the correct version for your operating system, please check out [Kuma's official installation page](https://kuma.io/install).
 
 ```bash
 $ wget https://kong.bintray.com/kuma/kuma-0.3.2-darwin-amd64.tar.gz
---2020-01-13 11:56:39--  https://kong.bintray.com/kuma/kuma-0.3.2-darwin-amd64.tar.gz
-Resolving kong.bintray.com (kong.bintray.com)... 52.41.227.164, 34.214.70.158
-Connecting to kong.bintray.com (kong.bintray.com)|52.41.227.164|:443... connected.
+--2020-01-29 08:18:59--  https://kong.bintray.com/kuma/kuma-0.3.2-darwin-amd64.tar.gz
+Resolving kong.bintray.com (kong.bintray.com)... 52.35.230.20, 54.213.118.161
+Connecting to kong.bintray.com (kong.bintray.com)|52.35.230.20|:443... connected.
 HTTP request sent, awaiting response... 302
-Location: https://akamai.bintray.com/8a/8a1f56b7d7f62dfb737cf2138e82412176677745683a06a67fc83d1c4388911f?__gda__=exp=1578888519~hmac=dafbee4fdd1670010d54e0e1d4e234a62b1ff0c74d503196bd82fde5ffbce7d8&response-content-disposition=attachment%3Bfilename%3D%22kuma-0.3.2-darwin-amd64.tar.gz%22&response-content-type=application%2Fgzip&requestInfo=U2FsdGVkX1_nPLxaZ2QotUT46adiCblIFpbPK7YYm7ib-GJ62wBQA77ydUDRL8FW8kMtC860-claI5VX3M_6Ms8YUPbPWYwpciVi2cBFLFc96wd9RAVomgiq_IDfvwxT&response-X-Checksum-Sha1=fc31e8100d35b9232376a90c00142c59fd284742&response-X-Checksum-Sha2=8a1f56b7d7f62dfb737cf2138e82412176677745683a06a67fc83d1c4388911f [following]
---2020-01-13 11:56:40--  https://akamai.bintray.com/8a/8a1f56b7d7f62dfb737cf2138e82412176677745683a06a67fc83d1c4388911f?__gda__=exp=1578888519~hmac=dafbee4fdd1670010d54e0e1d4e234a62b1ff0c74d503196bd82fde5ffbce7d8&response-content-disposition=attachment%3Bfilename%3D%22kuma-0.3.2-darwin-amd64.tar.gz%22&response-content-type=application%2Fgzip&requestInfo=U2FsdGVkX1_nPLxaZ2QotUT46adiCblIFpbPK7YYm7ib-GJ62wBQA77ydUDRL8FW8kMtC860-claI5VX3M_6Ms8YUPbPWYwpciVi2cBFLFc96wd9RAVomgiq_IDfvwxT&response-X-Checksum-Sha1=fc31e8100d35b9232376a90c00142c59fd284742&response-X-Checksum-Sha2=8a1f56b7d7f62dfb737cf2138e82412176677745683a06a67fc83d1c4388911f
-Resolving akamai.bintray.com (akamai.bintray.com)... 173.222.181.233
-Connecting to akamai.bintray.com (akamai.bintray.com)|173.222.181.233|:443... connected.
+Location: https://akamai.bintray.com/8a/8a1f56b7d7f62dfb737cf2138e82412176677745683a06a67fc83d1c4388911f?__gda__=exp=1580315460~hmac=164178d823d0ee7b1a86c430c08cfa4f17645d9eb0358548d08c4e550b7b7b41&response-content-disposition=attachment%3Bfilename%3D%22kuma-0.3.2-darwin-amd64.tar.gz%22&response-content-type=application%2Fgzip&requestInfo=U2FsdGVkX1-pgkR3rI6Ar_IDSk0j0ScH5vSQrRPVgMN_T2NrKdQIB5U1gBQTas-EdhdbFUu87diE2ZudHfJjbvgt-8B7mzQTssMNeF-h-tbfSHLzflNh9Fq4tYNmv4u2&response-X-Checksum-Sha1=fc31e8100d35b9232376a90c00142c59fd284742&response-X-Checksum-Sha2=8a1f56b7d7f62dfb737cf2138e82412176677745683a06a67fc83d1c4388911f [following]
+--2020-01-29 08:19:00--  https://akamai.bintray.com/8a/8a1f56b7d7f62dfb737cf2138e82412176677745683a06a67fc83d1c4388911f?__gda__=exp=1580315460~hmac=164178d823d0ee7b1a86c430c08cfa4f17645d9eb0358548d08c4e550b7b7b41&response-content-disposition=attachment%3Bfilename%3D%22kuma-0.3.2-darwin-amd64.tar.gz%22&response-content-type=application%2Fgzip&requestInfo=U2FsdGVkX1-pgkR3rI6Ar_IDSk0j0ScH5vSQrRPVgMN_T2NrKdQIB5U1gBQTas-EdhdbFUu87diE2ZudHfJjbvgt-8B7mzQTssMNeF-h-tbfSHLzflNh9Fq4tYNmv4u2&response-X-Checksum-Sha1=fc31e8100d35b9232376a90c00142c59fd284742&response-X-Checksum-Sha2=8a1f56b7d7f62dfb737cf2138e82412176677745683a06a67fc83d1c4388911f
+Resolving akamai.bintray.com (akamai.bintray.com)... 96.16.173.225
+Connecting to akamai.bintray.com (akamai.bintray.com)|96.16.173.225|:443... connected.
 HTTP request sent, awaiting response... 200 OK
 Length: 48354601 (46M) [application/gzip]
 Saving to: ‘kuma-0.3.2-darwin-amd64.tar.gz’
 
-kuma-0.3.2-darwin-amd64.tar.gz      100%[===================================================================>]  46.11M  5.36MB/s    in 9.3s
+kuma-0.3.2-darwin-amd64.tar.gz                                         100%[===========================================================================================================================================================================>]  46.11M  4.77MB/s    in 11s
 
-2020-01-13 11:56:50 (4.96 MB/s) - ‘kuma-0.3.2-darwin-amd64.tar.gz’ saved [48354601/48354601]
+2020-01-29 08:19:11 (4.21 MB/s) - ‘kuma-0.3.2-darwin-amd64.tar.gz’ saved [48354601/48354601]
 ```
 
-### 5. Unbundle the files to get the following components:
+Next, unbundle the files to get the following components:
 
 ```bash
 $ tar xvzf kuma-0.3.2-darwin-amd64.tar.gz
@@ -118,9 +106,9 @@ x ./
 x ./README
 x ./bin/
 x ./bin/kuma-cp
-x ./bin/envoyl
+x ./bin/envoy
 x ./bin/kumactl
-x ./bin/kuma-prometheus-sds
+x ./bin/kuma-prometheus-sd
 x ./bin/kuma-tcp-echo
 x ./bin/kuma-dp
 x ./NOTICE
@@ -130,14 +118,31 @@ x ./conf/
 x ./conf/kuma-cp.conf
 ```
 
-### 6. Go into the ./bin directory where the kuma components will be:
+Navigate into the ./bin directory where the kuma components will be:
 
 ```bash
 $ cd bin && ls
 envoy			kuma-cp			kuma-dp			kuma-prometheus-sd	kuma-tcp-echo		kumactl
 ```
 
-### 7. Install the control plane using `kumactl`
+Kuma does not automatically add itself to the `$PATH` variable. To make it easier to utilize Kuma's CLI client, add this bin directory to your path by running:
+
+```
+export PATH=$PATH:.
+```
+
+## Tools
+
+### kumactl
+
+The `kumactl` application is a CLI client for the underlying HTTP API of Kuma. Therefore, you can access the state of Kuma by leveraging with the API directly. In universal mode you will be able to also make changes via the HTTP API, while in Kubernetes mode the HTTP API is read-only. 
+
+**Throughout this guide, you will be using `kumactl [..]` frequently so make sure you have this configured properly.**
+
+
+#### Installating Control-Plane
+
+Install the control plane using `kumactl`
 
 ```bash
 $ ./kumactl install control-plane | kubectl apply -f -
